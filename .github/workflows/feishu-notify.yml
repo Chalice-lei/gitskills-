@@ -1,24 +1,20 @@
-name: CI Build with Lark Notification
-on: [push]
+name: Feishu Notify
+on:
+  push:
+    branches:
+      - main
 jobs:
-  build:
+  notify-feishu:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Build Project
-        run: ./build.sh
-  notify:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send Lark Notification
-        uses: drayeasy/action-lark-notify@main
-        env:
-          LARK_WEBHOOK: ${{ secrets.LARK_WEBHOOK }}
-          LARK_TITLE: "🚀 构建结果通知"
-          LARK_CONTENT: |
-            **仓库:** ${{ github.repository }}
-            **提交人:** ${{ github.actor }}
-            **提交信息:** ${{ github.event.head_commit.message }}
-            **构建状态:** ${{ job.status }}
-            **查看详情:** [GitHub Actions Log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Convert and Notify
+        run: |
+          # 获取GitHub事件数据
+          github_event=$(cat $GITHUB_EVENT_PATH)
+          # 提取关键信息，如提交者、提交信息等
+          committer=$(echo $github_event | jq -r '.pusher.name')
+          commit_message=$(echo $github_event | jq -r '.head_commit.message')
+          # 构造飞书机器人的消息格式
+          feishu_message='{"msg_type":"text","content":{"text":"'$committer' 推送了新代码：'$commit_message'"}}'
+          # 发送消息给飞书机器人
+          curl -X POST -H "Content-Type: application/json" -d "$feishu_message" https://open.larksuite.com/open-apis/bot/v2/hook/f15fda3c-fe70-47dc-aac0-08d5ee8bb104
