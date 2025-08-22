@@ -1,20 +1,80 @@
-name: Feishu Notify
+name: 飞书代码更新通知
 on:
   push:
-    branches:
-      - main
+    branches: [ main, master ]  # 监听主分支的推送事件
+  pull_request:
+    types: [ opened, closed, reopened, synchronize ]  # 监听PR相关事件
+    branches: [ main, master ]
+
 jobs:
-  notify-feishu:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Convert and Notify
+      - name: 获取事件数据
+        id: get_event
         run: |
-          # 获取GitHub事件数据
-          github_event=$(cat $GITHUB_EVENT_PATH)
-          # 提取关键信息，如提交者、提交信息等
-          committer=$(echo $github_event | jq -r '.pusher.name')
-          commit_message=$(echo $github_event | jq -r '.head_commit.message')
-          # 构造飞书机器人的消息格式
-          feishu_message='{"msg_type":"text","content":{"text":"'$committer' 推送了新代码：'$commit_message'"}}'
-          # 发送消息给飞书机器人
-          curl -X POST -H "Content-Type: application/json" -d "$feishu_message" https://open.larksuite.com/open-apis/bot/v2/hook/f15fda3c-fe70-47dc-aac0-08d5ee8bb104
+          # 读取GitHub事件数据并设置为环境变量
+          echo "EVENT_DATA=$(cat $GITHUB_EVENT_PATH | jq -c .)" >> $GITHUB_ENV
+
+      - name: 生成飞书消息
+        id: generate_message
+        run: |
+          # 根据事件类型生成不同的消息内容
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # 处理推送事件
+            COMMITTER="${{ github.event.pusher.name }}"
+            COMMIT_MSG="${{ github.event.head_commit.message }}"
+            REPO_NAME="${{ github.repository }}"
+            BRANCH_NAME="${{ github.ref_name }}"
+            COMMIT_URL="${{ github.event.head_commit.url }}"
+            
+            MESSAGE="📤 <$COMMITTER> 向 [$REPO_NAME:$BRANCH_NAME] 推送了新代码：\n"
+            MESSAGE+="💬 提交信息：$COMMIT_MSG\n"
+            MESSAGE+="🔗 <$COMMIT_URL|查看详情>"
+          else
+            # 处理PR事件
+            PR_ACTION="${{ github.event.pull_request.state }}"
+            PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            PR_URL="${{ github.event.pull_request.html_url }}"
+            REPO_NAME="${{ github.repository }}"
+            
+            if [ "$PR_ACTION" = "open" ]; then
+              ACTION_EMOJI="📥"
+              ACTION_TEXT="创建了"
+            elif [ "$PR_ACTION" = "closed" ]; then
+              if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+                ACTION_EMOJI="✅"
+                ACTION_TEXT="合并了"
+              else
+                ACTION_EMOJI="❌"
+                ACTION_TEXT="关闭了"
+              fi
+            else
+              ACTION_EMOJI="🔄"
+              ACTION_TEXT="更新了"
+            fi
+            
+            MESSAGE="$ACTION_EMOJI <$PR_AUTHOR> $ACTION_TEXT [$REPO_NAME] 的PR：\n"
+            MESSAGE+="📝 #$PR_NUMBER $PR_TITLE\n"
+            MESSAGE+="🔗 <$PR_URL|查看详情>"
+          fi
+          
+          # 输出格式化后的消息
+          echo "MESSAGE=$MESSAGE" >> $GITHUB_ENV
+
+      - name: 发送到飞书
+        run: |
+          # 构造飞书消息格式
+          FEISHU_PAYLOAD=$(jq -n \
+            --arg msg_type "text" \
+            --arg text "${{ env.MESSAGE }}" \
+            '{msg_type: $msg_type, content: {text: $text}}')
+
+          # 发送请求到飞书机器人
+          eval "curl -X POST '${{ secrets.FEISHU_WEBHOOK }}' \
+            -H 'Content-Type: application/json' \
+            $HEADER \
+            -d '$FEISHU_PAYLOAD'"
+
